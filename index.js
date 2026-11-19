@@ -34,7 +34,7 @@ let isBotClosed = false;
 let privateMode = false;
 let antiGroupLink = true;
 const allowedUsers = new Set();
-const mutedUsers = new Set(); // قائمة الأشخاص المكتومين
+const mutedUsers = new Set();
 
 const badWords = [
     'كسمك',
@@ -77,7 +77,6 @@ async function handleCommand(msg) {
     const senderId = msg.author || msg.from;
     const isAuthorized = msg.fromMe || allowedUsers.has(senderId);
 
-    // 1. حذف رسائل الشخص المكتوم جوه الجروب
     if (chat.isGroup && !msg.fromMe && mutedUsers.has(senderId)) {
         const canDelete = await isBotGroupAdmin(chat);
         if (canDelete) {
@@ -88,7 +87,6 @@ async function handleCommand(msg) {
         return;
     }
 
-    // 2. حذف لينكات الجروبات تلقائياً (طول ما antiGroupLink شغال)
     if (
         chat.isGroup &&
         antiGroupLink &&
@@ -105,7 +103,6 @@ async function handleCommand(msg) {
         return;
     }
 
-    // 3. أوامر المالك فقط (.قفل / .فتح / .اسكت1 / .استخدام / .عدم استخدام)
     if (msg.fromMe && text === '.قفل') {
         isBotClosed = true;
         await msg.reply('تم قفل البوت.');
@@ -171,7 +168,6 @@ async function handleCommand(msg) {
         return;
     }
 
-    // 4. الأوامر
     if (text === 'اوامر' || text === '.اوامر') {
         await msg.reply(
             'قائمة الأوامر:\n' +
@@ -379,4 +375,4 @@ client.on('message_create', async (msg) => {
 });
 
 client.initialize();
-        
+            
