@@ -10,6 +10,8 @@ const client = new Client({
     },
     puppeteer: {
         headless: true,
+        protocolTimeout: 120000,
+        timeout: 0,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -32,6 +34,7 @@ let isBotClosed = false;
 let privateMode = false;
 let antiGroupLink = true;
 const allowedUsers = new Set();
+const mutedUsers = new Set(); // قائمة الأشخاص المكتومين
 
 const badWords = [
     'كسمك',
@@ -74,6 +77,18 @@ async function handleCommand(msg) {
     const senderId = msg.author || msg.from;
     const isAuthorized = msg.fromMe || allowedUsers.has(senderId);
 
+    // 1. حذف رسائل الشخص المكتوم جوه الجروب
+    if (chat.isGroup && !msg.fromMe && mutedUsers.has(senderId)) {
+        const canDelete = await isBotGroupAdmin(chat);
+        if (canDelete) {
+            try {
+                await msg.delete(true);
+            } catch (_) {}
+        }
+        return;
+    }
+
+    // 2. حذف لينكات الجروبات تلقائياً (طول ما antiGroupLink شغال)
     if (
         chat.isGroup &&
         antiGroupLink &&
@@ -90,6 +105,7 @@ async function handleCommand(msg) {
         return;
     }
 
+    // 3. أوامر المالك فقط (.قفل / .فتح / .اسكت1 / .استخدام / .عدم استخدام)
     if (msg.fromMe && text === '.قفل') {
         isBotClosed = true;
         await msg.reply('تم قفل البوت.');
@@ -155,6 +171,7 @@ async function handleCommand(msg) {
         return;
     }
 
+    // 4. الأوامر
     if (text === 'اوامر' || text === '.اوامر') {
         await msg.reply(
             'قائمة الأوامر:\n' +
@@ -166,9 +183,10 @@ async function handleCommand(msg) {
             '6- .استرداد (منشن أو رد لسحب صورة البروفايل)\n' +
             '7- .رفع (منشن أو رد لرفع مشرف في الجروب)\n' +
             '8- .طرد (منشن شخص داخل الجروب)\n' +
-            '9- .جوزني (داخل الجروب)\n' +
-            '10- .استخدام / .عدم استخدام + رقم/منشن (للمالك)\n' +
-            '11- .اسكت1 / .قفل / .فتح / .خاص / .جماعي (للمالك)'
+            '9- .كتم / .فك_الكتم (منشن أو رد داخل الجروب)\n' +
+            '10- .جوزني (داخل الجروب)\n' +
+            '11- .استخدام / .عدم استخدام + رقم/منشن (للمالك)\n' +
+            '12- .اسكت1 / .قفل / .فتح / .خاص / .جماعي (للمالك)'
         );
     } else if (text === 'نكتة') {
         const jokes = [
@@ -269,6 +287,44 @@ async function handleCommand(msg) {
         } catch (_) {
             await msg.reply('مقدرتش أرفعه مشرف.');
         }
+    } else if (text.startsWith('.كتم') && !text.startsWith('.فك_الكتم')) {
+        if (!isAuthorized) {
+            await msg.reply('الأمر ده للمالك أو الأشخاص المسموح لهم بس.');
+            return;
+        }
+        if (!chat.isGroup) {
+            await msg.reply('الأمر ده بيشتغل جوه الجروبات بس.');
+            return;
+        }
+        const canMute = await isBotGroupAdmin(chat);
+        if (!canMute) {
+            await msg.reply('لازم ترفعني مشرف في الجروب الأول عشان أقدر أمسح رسايل الشخص المكتوم.');
+            return;
+        }
+        const arg = text.replace('.كتم', '').trim();
+        const targetId = await getTargetUserId(msg, arg);
+        if (!targetId) {
+            await msg.reply('منشن الشخص أو رد على رسالته واكتب .كتم');
+            return;
+        }
+        mutedUsers.add(targetId);
+        const contact = await client.getContactById(targetId);
+        await chat.sendMessage(`تم كتم @${contact.id.user}.`, {
+            mentions: [contact]
+        });
+    } else if (text.startsWith('.فك_الكتم')) {
+        if (!isAuthorized) {
+            await msg.reply('الأمر ده للمالك أو الأشخاص المسموح لهم بس.');
+            return;
+        }
+        const arg = text.replace('.فك_الكتم', '').trim();
+        const targetId = await getTargetUserId(msg, arg);
+        if (!targetId) {
+            await msg.reply('منشن الشخص أو رد على رسالته واكتب .فك_الكتم');
+            return;
+        }
+        mutedUsers.delete(targetId);
+        await msg.reply(`تم فك الكتم عن ${targetId.replace('@c.us', '')}.`);
     } else if (text === '.جوزني') {
         if (!chat.isGroup) {
             await msg.reply('الأمر ده بيشتغل جوه الجروبات بس.');
@@ -323,4 +379,4 @@ client.on('message_create', async (msg) => {
 });
 
 client.initialize();
-    
+        
