@@ -1,6 +1,8 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 
 const PHONE_NUMBER = '201119815662';
+const BOT_SIGNATURE = 'Ahmed Abdelbaset';
+const MAX_WARNINGS = 5;
 
 const client = new Client({
     authStrategy: new LocalAuth(),
@@ -35,6 +37,7 @@ let privateMode = false;
 let antiGroupLink = true;
 const allowedUsers = new Set();
 const mutedUsers = new Set();
+const linkWarnings = new Map(); // لتخزين عدد إنذارات اللينكات لكل مستخدم داخل الجروب
 
 const badWords = [
     'كسمك',
@@ -43,6 +46,34 @@ const badWords = [
     'يبن شرموطه',
     'يبن عرص'
 ];
+
+const TOP_BAR = '┏━━━━━━━━━━━━━━━━━━━━┓';
+const MID_BAR = '┣━━━━━━━━━━━━━━━━━━━━┫';
+const BOT_BAR = '┗━━━━━━━━━━━━━━━━━━━━┛';
+
+function cardBox(icon, title, rows = [], footerNote = '') {
+    const body = rows.map((r) => `│ ${r}`).join('\n');
+    const extra = footerNote ? `\n│ ${footerNote}` : '';
+    return `${TOP_BAR}\n│ ${icon} *${title}*\n${MID_BAR}\n${body}${extra}\n${BOT_BAR}\n╰─▸ *${BOT_SIGNATURE}*`;
+}
+
+function numberToArabicWord(num) {
+    const map = {
+        5: 'خمس',
+        4: 'أربع',
+        3: 'تلات',
+        2: 'اتنين',
+        1: 'واحد'
+    };
+    return map[num] || String(num);
+}
+
+function getUserLabel(contact, fallbackId = '') {
+    if (contact) {
+        return contact.pushname || contact.name || contact.id.user || fallbackId.replace('@c.us', '');
+    }
+    return fallbackId.replace('@c.us', '');
+}
 
 function normalizeToSerialized(input) {
     if (!input) return null;
@@ -77,6 +108,7 @@ async function handleCommand(msg) {
     const senderId = msg.author || msg.from;
     const isAuthorized = msg.fromMe || allowedUsers.has(senderId);
 
+    // 1. حذف رسائل الشخص المكتوم جوه الجروب
     if (chat.isGroup && !msg.fromMe && mutedUsers.has(senderId)) {
         const canDelete = await isBotGroupAdmin(chat);
         if (canDelete) {
@@ -87,6 +119,7 @@ async function handleCommand(msg) {
         return;
     }
 
+    // 2. حذف لينكات الجروبات تلقائياً ونظام الـ 5 إنذارات
     if (
         chat.isGroup &&
         antiGroupLink &&
@@ -97,27 +130,82 @@ async function handleCommand(msg) {
         if (canDelete) {
             try {
                 await msg.delete(true);
-                await chat.sendMessage('ممنوع نشر لينكات جروبات هنا.');
             } catch (_) {}
+
+            const key = `${chat.id._serialized}:${senderId}`;
+            const currentWarns = (linkWarnings.get(key) || 0) + 1;
+            const remaining = MAX_WARNINGS - currentWarns;
+
+            let contact = null;
+            try {
+                contact = await client.getContactById(senderId);
+            } catch (_) {}
+            const tag = '@' + senderId.replace('@c.us', '');
+
+            if (remaining > 0) {
+                linkWarnings.set(key, currentWarns);
+                const wordCount = numberToArabicWord(remaining);
+                const warnLabel = remaining === 1 ? 'إنذار واحد' : `${wordCount} إنذارات`;
+
+                await chat.sendMessage(
+                    cardBox('⚠️', 'مخالفة نشر لينكات', [
+                        `العضو : ${tag}`,
+                        `السبب : نشر رابط جروب`,
+                        `الحالة : فاضلك ${warnLabel}`
+                    ]),
+                    contact ? { mentions: [contact] } : {}
+                );
+            } else {
+                linkWarnings.delete(key);
+                try {
+                    await chat.removeParticipants([senderId]);
+                    await chat.sendMessage(
+                        cardBox('🚨', 'تم الطرد لتجاوز الإنذارات', [
+                            `العضو : ${tag}`,
+                            `السبب : استنفاد جميع الإنذارات (${MAX_WARNINGS})`
+                        ]),
+                        contact ? { mentions: [contact] } : {}
+                    );
+                } catch (_) {
+                    await chat.sendMessage(
+                        cardBox('⚠️', 'تنبيه الإنذارات', [
+                            `العضو : ${tag}`,
+                            'الحالة : خلصت إنذاراتك (تعذر الطرد تلقائياً)'
+                        ]),
+                        contact ? { mentions: [contact] } : {}
+                    );
+                }
+            }
         }
         return;
     }
 
+    // 3. أوامر المالك فقط
     if (msg.fromMe && text === '.قفل') {
         isBotClosed = true;
-        await msg.reply('تم قفل البوت.');
+        await msg.reply(cardBox('🔒', 'حالة البوت', ['الوضع : مقفول تماماً']));
         return;
     }
 
     if (msg.fromMe && text === '.فتح') {
         isBotClosed = false;
-        await msg.reply('تم فتح البوت.');
+        await msg.reply(cardBox('🔓', 'حالة البوت', ['الوضع : مفتوح وجاهز']));
         return;
     }
 
     if (msg.fromMe && text === '.اسكت1') {
         antiGroupLink = false;
-        await msg.reply('تم إيقاف حذف لينكات الجروبات تلقائياً.');
+        await msg.reply(cardBox('🔇', 'حماية اللينكات', ['الحالة : تم الإيقاف']));
+        return;
+    }
+
+    if (msg.fromMe && text === '.حمص') {
+        await msg.reply('بومه');
+        return;
+    }
+
+    if (msg.fromMe && text === '.كسمك') {
+        await msg.reply('شكرا');
         return;
     }
 
@@ -125,11 +213,27 @@ async function handleCommand(msg) {
         const arg = text.replace('.استخدام', '').trim();
         const targetId = await getTargetUserId(msg, arg);
         if (!targetId) {
-            await msg.reply('اكتب: .استخدام 201xxxxxxxxx أو اعمل منشن/رد على الشخص.');
+            await msg.reply(
+                cardBox('ℹ️', 'طريقة الاستخدام', [
+                    'منشن أو رد على الشخص واكتب .استخدام',
+                    'أو اكتب : .استخدام 201xxxxxxxxx'
+                ])
+            );
             return;
         }
         allowedUsers.add(targetId);
-        await msg.reply(`تم السماح لـ ${targetId.replace('@c.us', '')} باستخدام البوت.`);
+        let label = targetId.replace('@c.us', '');
+        try {
+            const contact = await client.getContactById(targetId);
+            label = getUserLabel(contact, targetId);
+        } catch (_) {}
+
+        await msg.reply(
+            cardBox('✅', 'منح صلاحية الاستخدام', [
+                `المستخدم : ~ ${label}`,
+                'الحالة : مسموح له باستخدام البوت'
+            ])
+        );
         return;
     }
 
@@ -137,11 +241,27 @@ async function handleCommand(msg) {
         const arg = text.replace('.عدم استخدام', '').trim();
         const targetId = await getTargetUserId(msg, arg);
         if (!targetId) {
-            await msg.reply('اكتب: .عدم استخدام 201xxxxxxxxx أو اعمل منشن/رد على الشخص.');
+            await msg.reply(
+                cardBox('ℹ️', 'طريقة إلغاء الاستخدام', [
+                    'منشن أو رد على الشخص واكتب .عدم استخدام',
+                    'أو اكتب : .عدم استخدام 201xxxxxxxxx'
+                ])
+            );
             return;
         }
         allowedUsers.delete(targetId);
-        await msg.reply(`تم إلغاء صلاحية استخدام البوت عن ${targetId.replace('@c.us', '')}.`);
+        let label = targetId.replace('@c.us', '');
+        try {
+            const contact = await client.getContactById(targetId);
+            label = getUserLabel(contact, targetId);
+        } catch (_) {}
+
+        await msg.reply(
+            cardBox('❌', 'سحب صلاحية الاستخدام', [
+                `المستخدم : ~ ${label}`,
+                'الحالة : تم إلغاء الصلاحية'
+            ])
+        );
         return;
     }
 
@@ -149,17 +269,22 @@ async function handleCommand(msg) {
 
     if (msg.fromMe && text === '.خاص') {
         privateMode = true;
-        await msg.reply('تم تفعيل الوضع الخاص (لأوامرك فقط).');
+        await msg.reply(cardBox('🛡️', 'وضع التشغيل', ['الوضع : خاص']));
         return;
     }
 
     if (msg.fromMe && text === '.جماعي') {
         privateMode = false;
-        await msg.reply('تم تفعيل الوضع الجماعي (الكل يقدر يستخدم البوت).');
+        await msg.reply(cardBox('🌐', 'وضع التشغيل', ['الوضع : جماعي للجميع']));
         return;
     }
 
     if (privateMode && !isAuthorized) {
+        return;
+    }
+
+    if (!msg.fromMe && text === '.بوت') {
+        await msg.reply('كسمك');
         return;
     }
 
@@ -168,21 +293,17 @@ async function handleCommand(msg) {
         return;
     }
 
+    // 4. الأوامر العامة والإشرافية
     if (text === 'اوامر' || text === '.اوامر') {
         await msg.reply(
-            'قائمة الأوامر:\n' +
-            '1- اوامر\n' +
-            '2- نكتة\n' +
-            '3- حظي\n' +
-            '4- ملك او كتابة\n' +
-            '5- .محكمة (لعبة المحكمة داخل الجروب)\n' +
-            '6- .استرداد (منشن أو رد لسحب صورة البروفايل)\n' +
-            '7- .رفع (منشن أو رد لرفع مشرف في الجروب)\n' +
-            '8- .طرد (منشن شخص داخل الجروب)\n' +
-            '9- .كتم / .فك_الكتم (منشن أو رد داخل الجروب)\n' +
-            '10- .جوزني (داخل الجروب)\n' +
-            '11- .استخدام / .عدم استخدام + رقم/منشن (للمالك)\n' +
-            '12- .اسكت1 / .قفل / .فتح / .خاص / .جماعي (للمالك)'
+            cardBox('📜', 'قائمة أوامر البوت', [
+                '✦ ترفيه : نكتة | حظي | ملك او كتابة',
+                '✦ ألعاب : .محكمة | .جوزني',
+                '✦ إشراف : .طرد | .رفع | .كتم | .فك_الكتم',
+                '✦ أدوات : .استرداد | .بوت',
+                '✦ تحكم : .استخدام | .عدم استخدام',
+                '✦ نظام : .اسكت1 | .قفل | .فتح | .خاص | .جماعي'
+            ])
         );
     } else if (text === 'نكتة') {
         const jokes = [
@@ -190,20 +311,32 @@ async function handleCommand(msg) {
             'مرة مهندس اشترى عربية، كل ما تقف ينزل يخبط الكبوت ويقول: شغال اهو.',
             'مرة طالب بيقول للمدرس: يا أستاذ هو الواحد ممكن يتعاقب على حاجة معملهاش؟ قاله: لأ طبعاً. قاله: طب أنا معملتش الواجب.'
         ];
-        await msg.reply(jokes[Math.floor(Math.random() * jokes.length)]);
+        await msg.reply(
+            cardBox('😂', 'نكتة اليوم', [
+                jokes[Math.floor(Math.random() * jokes.length)]
+            ])
+        );
     } else if (text === 'حظي') {
         const luck = [
             'حظك النهاردة حلو جداً، خبر كويس في الطريق.',
             'حظك متوسط، خد الأمور بهدوء وبلاش تسرع.',
             'حظك محتاج صبر شوية النهاردة، وبكرة أحلى.'
         ];
-        await msg.reply(luck[Math.floor(Math.random() * luck.length)]);
+        await msg.reply(
+            cardBox('🍀', 'توقعات الحظ', [
+                luck[Math.floor(Math.random() * luck.length)]
+            ])
+        );
     } else if (text === 'ملك او كتابة') {
         const coin = Math.random() < 0.5 ? 'ملك' : 'كتابة';
-        await msg.reply('النتيجة: ' + coin);
+        await msg.reply(
+            cardBox('🪙', 'رمية العملة', [
+                `النتيجة : *${coin}*`
+            ])
+        );
     } else if (text === '.محكمة') {
         if (!chat.isGroup) {
-            await msg.reply('لعبة المحكمة بتشتغل جوه الجروبات بس.');
+            await msg.reply(cardBox('⚖️', 'تنبيه', ['لعبة المحكمة متاحة داخل الجروبات فقط']));
             return;
         }
         const participants = chat.participants || [];
@@ -230,136 +363,174 @@ async function handleCommand(msg) {
         const verdict = verdicts[Math.floor(Math.random() * verdicts.length)];
 
         await chat.sendMessage(
-            `⚖️ *جلسة محكمة الجروب*\n` +
-            `المتهم: ${tag}\n` +
-            `التهمة: ${charge}\n` +
-            `الحكم: ${verdict}`,
+            cardBox('⚖️', 'جلسة محكمة الجروب', [
+                `المتهم : ${tag}`,
+                `التهمة : ${charge}`,
+                `الحكم : ${verdict}`
+            ]),
             { mentions: [contact] }
         );
     } else if (text.startsWith('.استرداد')) {
         const arg = text.replace('.استرداد', '').trim();
         const targetId = await getTargetUserId(msg, arg);
         if (!targetId) {
-            await msg.reply('اعمل منشن أو رد على رسالة الشخص واكتب .استرداد');
+            await msg.reply(cardBox('🖼️', 'تنبيه', ['منشن أو رد على رسالة الشخص واكتب .استرداد']));
             return;
         }
         try {
             const picUrl = await client.getProfilePicUrl(targetId);
             if (!picUrl) {
-                await msg.reply('الشخص ده قافل صورة البروفايل أو مش حاطط صورة.');
+                await msg.reply(cardBox('🖼️', 'تعذر الجلب', ['الشخص ده قافل البروفايل أو مش حاطط صورة']));
                 return;
             }
             const media = await MessageMedia.fromUrl(picUrl);
-            await msg.reply(media, undefined, { caption: 'صورة البروفايل:' });
+            let label = targetId.replace('@c.us', '');
+            try {
+                const contact = await client.getContactById(targetId);
+                label = getUserLabel(contact, targetId);
+            } catch (_) {}
+
+            await msg.reply(media, undefined, {
+                caption: cardBox('🖼️', 'صورة البروفايل', [
+                    `المستخدم : ~ ${label}`
+                ])
+            });
         } catch (_) {
-            await msg.reply('مقدرتش أجيب صورة البروفايل.');
+            await msg.reply(cardBox('⚠️', 'خطأ', ['مقدرتش أجيب صورة البروفايل']));
         }
     } else if (text.startsWith('.رفع')) {
         if (!isAuthorized) {
-            await msg.reply('الأمر ده للمالك أو الأشخاص المسموح لهم بس.');
+            await msg.reply(cardBox('⛔', 'صلاحيات', ['الأمر ده للمالك أو الأشخاص المسموح لهم بس']));
             return;
         }
         if (!chat.isGroup) {
-            await msg.reply('الأمر ده بيشتغل جوه الجروبات بس.');
+            await msg.reply(cardBox('👑', 'تنبيه', ['الأمر ده بيشتغل جوه الجروبات بس']));
             return;
         }
         const canPromote = await isBotGroupAdmin(chat);
         if (!canPromote) {
-            await msg.reply('لازم ترفعني مشرف في الجروب الأول عشان أقدر أرفع غيري.');
+            await msg.reply(cardBox('⚠️', 'تنبيه الإشراف', ['ارفع البوت مشرف في الجروب الأول عشان يقدر يرفع غيره']));
             return;
         }
         const arg = text.replace('.رفع', '').trim();
         const targetId = await getTargetUserId(msg, arg);
         if (!targetId) {
-            await msg.reply('منشن الشخص أو رد على رسالته واكتب .رفع');
+            await msg.reply(cardBox('👑', 'تنبيه', ['منشن الشخص أو رد على رسالته واكتب .رفع']));
             return;
         }
         try {
             await chat.promoteParticipants([targetId]);
             const contact = await client.getContactById(targetId);
-            await chat.sendMessage(`تم رفع @${contact.id.user} مشرفاً بنجاح.`, {
-                mentions: [contact]
-            });
+            const label = getUserLabel(contact, targetId);
+            await chat.sendMessage(
+                cardBox('👑', 'ترقية عضو', [
+                    `العضو : @${contact.id.user} ~ ${label}`,
+                    'الصلاحية : مشرف المجموعة'
+                ]),
+                { mentions: [contact] }
+            );
         } catch (_) {
-            await msg.reply('مقدرتش أرفعه مشرف.');
+            await msg.reply(cardBox('⚠️', 'تعذر الترقية', ['مقدرتش أرفعه مشرف']));
         }
     } else if (text.startsWith('.كتم') && !text.startsWith('.فك_الكتم')) {
         if (!isAuthorized) {
-            await msg.reply('الأمر ده للمالك أو الأشخاص المسموح لهم بس.');
+            await msg.reply(cardBox('⛔', 'صلاحيات', ['الأمر ده للمالك أو الأشخاص المسموح لهم بس']));
             return;
         }
         if (!chat.isGroup) {
-            await msg.reply('الأمر ده بيشتغل جوه الجروبات بس.');
+            await msg.reply(cardBox('🤐', 'تنبيه', ['الأمر ده بيشتغل جوه الجروبات بس']));
             return;
         }
         const canMute = await isBotGroupAdmin(chat);
         if (!canMute) {
-            await msg.reply('لازم ترفعني مشرف في الجروب الأول عشان أقدر أمسح رسايل الشخص المكتوم.');
+            await msg.reply(cardBox('⚠️', 'تنبيه الإشراف', ['ارفع البوت مشرف في الجروب الأول عشان يقدر يكتم']));
             return;
         }
         const arg = text.replace('.كتم', '').trim();
         const targetId = await getTargetUserId(msg, arg);
         if (!targetId) {
-            await msg.reply('منشن الشخص أو رد على رسالته واكتب .كتم');
+            await msg.reply(cardBox('🤐', 'تنبيه', ['منشن الشخص أو رد على رسالته واكتب .كتم']));
             return;
         }
         mutedUsers.add(targetId);
         const contact = await client.getContactById(targetId);
-        await chat.sendMessage(`تم كتم @${contact.id.user}.`, {
-            mentions: [contact]
-        });
+        const label = getUserLabel(contact, targetId);
+        await chat.sendMessage(
+            cardBox('🤐', 'تم كتم العضو', [
+                `العضو : @${contact.id.user} ~ ${label}`,
+                'الحالة : مكتوم (سيتم حذف رسائله)'
+            ]),
+            { mentions: [contact] }
+        );
     } else if (text.startsWith('.فك_الكتم')) {
         if (!isAuthorized) {
-            await msg.reply('الأمر ده للمالك أو الأشخاص المسموح لهم بس.');
+            await msg.reply(cardBox('⛔', 'صلاحيات', ['الأمر ده للمالك أو الأشخاص المسموح لهم بس']));
             return;
         }
         const arg = text.replace('.فك_الكتم', '').trim();
         const targetId = await getTargetUserId(msg, arg);
         if (!targetId) {
-            await msg.reply('منشن الشخص أو رد على رسالته واكتب .فك_الكتم');
+            await msg.reply(cardBox('🔊', 'تنبيه', ['منشن الشخص أو رد على رسالته واكتب .فك_الكتم']));
             return;
         }
         mutedUsers.delete(targetId);
-        await msg.reply(`تم فك الكتم عن ${targetId.replace('@c.us', '')}.`);
+        const contact = await client.getContactById(targetId);
+        const label = getUserLabel(contact, targetId);
+        await chat.sendMessage(
+            cardBox('🔊', 'تم فك الكتم', [
+                `العضو : @${contact.id.user} ~ ${label}`,
+                'الحالة : مسموح له بالتحدث'
+            ]),
+            { mentions: [contact] }
+        );
     } else if (text === '.جوزني') {
         if (!chat.isGroup) {
-            await msg.reply('الأمر ده بيشتغل جوه الجروبات بس.');
+            await msg.reply(cardBox('💍', 'تنبيه', ['الأمر ده بيشتغل جوه الجروبات بس']));
             return;
         }
         const candidates = (chat.participants || []).filter((p) => p.id._serialized !== senderId);
         if (candidates.length === 0) {
-            await msg.reply('مفيش حد تاني في الجروب أختاره.');
+            await msg.reply(cardBox('💍', 'تنبيه', ['مفيش حد تاني في الجروب أختاره']));
             return;
         }
         const chosen = candidates[Math.floor(Math.random() * candidates.length)];
         const contact = await client.getContactById(chosen.id._serialized);
-        await chat.sendMessage(`مبروك معرصين @${chosen.id.user}`, {
-            mentions: [contact]
-        });
+        const label = getUserLabel(contact, chosen.id._serialized);
+        await chat.sendMessage(
+            cardBox('💍', 'مبروك معرصين', [
+                `الشريك : @${chosen.id.user} ~ ${label}`
+            ]),
+            { mentions: [contact] }
+        );
     } else if (text.startsWith('.طرد')) {
         if (!isAuthorized) {
-            await msg.reply('الأمر ده للمالك أو الأشخاص المسموح لهم بس.');
+            await msg.reply(cardBox('⛔', 'صلاحيات', ['الأمر ده للمالك أو الأشخاص المسموح لهم بس']));
             return;
         }
         if (!chat.isGroup) {
-            await msg.reply('الأمر ده بيشتغل جوه الجروبات بس.');
+            await msg.reply(cardBox('🚪', 'تنبيه', ['الأمر ده بيشتغل جوه الجروبات بس']));
             return;
         }
         const canKick = await isBotGroupAdmin(chat);
         if (!canKick) {
-            await msg.reply('لازم ترفعني مشرف (أدمن) في الجروب الأول عشان أقدر أطرد.');
+            await msg.reply(cardBox('⚠️', 'تنبيه الإشراف', ['ارفع البوت مشرف في الجروب الأول عشان يقدر يطرد']));
             return;
         }
         const targets = msg.mentionedIds || [];
         if (targets.length === 0) {
-            await msg.reply('منشن الشخص اللي عايز تطرده مع كلمة .طرد');
+            await msg.reply(cardBox('🚪', 'تنبيه', ['منشن الشخص اللي عايز تطرده مع كلمة .طرد']));
             return;
         }
         try {
             await chat.removeParticipants(targets);
-            await msg.reply('تم الطرد بنجاح.');
+            await msg.reply(
+                cardBox('🚪', 'تم الطرد بنجاح', [
+                    `العدد : ${targets.length}`,
+                    'الحالة : تم إخراج العضو من المجموعة'
+                ])
+            );
         } catch (_) {
-            await msg.reply('مقدرتش أطرده (ممكن يكون مشرف أو في مشكلة في الصلاحيات).');
+            await msg.reply(cardBox('⚠️', 'تعذر الطرد', ['مقدرتش أطرده (ممكن يكون مشرف أو في مشكلة صلاحيات)']));
         }
     }
 }
