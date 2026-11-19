@@ -1,14 +1,3 @@
-    if (msg.fromMe && text.startsWith('.عدم استخدام')) {
-        const arg = text.replace('.عدم استخدام', '').trim();
-        const targetId = await getTargetUserId(msg, arg);
-        if (!targetId) {
-            await msg.reply('اكتب: .عدم استخدام 201xxxxxxxxx أو اعمل منشن/رد على الشخص.');
-            return;
-        }
-        allowedUsers.delete(targetId);
-        await msg.reply(`تم إلغاء صلاحية استخدام البوت عن ${targetId.replace('@c.us', '')}.`);
-        return;
-    }
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 
 const PHONE_NUMBER = '201119815662';
@@ -334,4 +323,4 @@ client.on('message_create', async (msg) => {
 });
 
 client.initialize();
-      
+    
